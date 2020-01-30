@@ -15,9 +15,10 @@ pub enum ParseTileError {
     OrientationError,
 }
 
-pub trait Provider<R: Read, E: std::error::Error>:
-    Fn(&std::path::Path) -> Result<R, E> + Copy
-{
+//pub trait Provider<R: Read, E: std::error::Error>: FnMut(&std::path::Path) -> Result<R, E> {}
+
+pub trait Provider<R: Read, E: std::error::Error> {
+    fn open(&mut self, path: &std::path::Path) -> Result<R, E>;
 }
 
 // Loops through the attributes once and pulls out the ones we ask it to. It
@@ -243,7 +244,7 @@ impl Map {
         parser: &mut EventReader<R>,
         attrs: Vec<OwnedAttribute>,
         map_path: Option<&Path>,
-        provider: Option<F>,
+        mut provider: Option<F>,
     ) -> Result<Map, TiledError>
     where
         R: Read,
@@ -273,8 +274,8 @@ impl Map {
         let mut object_groups = Vec::new();
         let mut layer_index = 0;
         parse_tag!(parser, "map", {
-            "tileset" => | attrs| {
-                tilesets.push(Tileset::new(parser, attrs, map_path, provider)?);
+            "tileset" => |attrs| {
+                tilesets.push(Tileset::new(parser, attrs, map_path, &mut provider)?);
                 Ok(())
             },
             "layer" => |attrs| {
@@ -370,7 +371,7 @@ impl Tileset {
         parser: &mut EventReader<R>,
         attrs: Vec<OwnedAttribute>,
         map_path: Option<&Path>,
-        provider: Option<F>,
+        provider: &mut Option<F>,
     ) -> Result<Tileset, TiledError>
     where
         R: Read,
@@ -428,7 +429,7 @@ impl Tileset {
     fn new_reference<R, E, F>(
         attrs: &[OwnedAttribute],
         map_path: Option<&Path>,
-        provider: Option<F>,
+        mut provider: &mut Option<F>,
     ) -> Result<Tileset, TiledError>
     where
         R: Read,
@@ -445,18 +446,14 @@ impl Tileset {
             TiledError::MalformedAttributes("tileset must have a firstgid, name tile width and height with correct types".to_string())
         );
 
-        let tileset_path = map_path.ok_or_else(|| TiledError::Other("Maps with external tilesets must know their file location.  See parse_with_path(Path).".to_string()))?.with_file_name(source);
-
-        if let Some(provider) = provider {
-            let file = provider(&tileset_path).map_err(|_| {
-                TiledError::Other(format!(
-                    "External tileset file not found: {:?}",
-                    tileset_path
-                ))
+        if let Some(ref mut provider) = &mut provider {
+            let file = provider.open(Path::new(&source)).map_err(|_| {
+                TiledError::Other(format!("External tileset file not found: {:?}", source))
             })?;
 
             Tileset::new_external(file, first_gid)
         } else {
+            let tileset_path = map_path.ok_or_else(|| TiledError::Other("Maps with external tilesets must know their file location.  See parse_with_path(Path).".to_string()))?.with_file_name(source);
             let file = File::open(&tileset_path).map_err(|_| {
                 TiledError::Other(format!(
                     "External tileset file not found: {:?}",
